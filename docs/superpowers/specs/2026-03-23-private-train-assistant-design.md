@@ -109,7 +109,7 @@ idle
 // 包含原始完整菜單 + 指定替換的動作名稱
 const prompt = `
 目前訓練菜單如下：
-${JSON.stringify(currentPlan.exercises)}
+${JSON.stringify(currentWorkoutPlan.exercises)}
 
 使用者想替換「${targetExerciseName}」這個動作。
 請提供一個替代動作，其他動作保持不變，輸出完整更新後的 JSON 菜單。
@@ -117,8 +117,8 @@ ${JSON.stringify(currentPlan.exercises)}
 ```
 
 - 使用者可連續替換多個動作（每次替換後回到 `show_menu`，可再選「要替換」）
-- 每次替換都帶入**最新版本**的 `currentPlan`
-- `currentPlan` 存於 `stores/chat.ts` 的 `currentWorkoutPlan`
+- 每次替換都帶入**最新版本**的 `currentWorkoutPlan`
+- `currentWorkoutPlan` 存於 `stores/chat.ts`
 
 ### Gemini API 呼叫時機
 
@@ -133,16 +133,18 @@ ${JSON.stringify(currentPlan.exercises)}
 
 ### System Prompt
 
+> **注意：** 步驟 1–3 由前端 UI 狀態機處理，Gemini 不參與。Gemini 只在步驟 3 完成後被呼叫一次，負責產出訓練菜單（或替換動作）。
+
 ```
-你是一個專業的個人重訓助理。你的工作是透過固定步驟引導使用者產出訓練菜單。
+你是一個專業的個人重訓助理，負責根據使用者的訓練條件產出訓練菜單。
 
 規則：
 1. 只回覆與訓練相關的問題，拒絕其他話題
-2. 嚴格按照對話步驟引導，不跳步
-3. 產出菜單時，必須以合法 JSON 格式輸出，格式如下：
+2. 產出菜單時，必須以合法 JSON 格式輸出，格式如下：
    {"category":"上肢","duration":45,"equipment":"有器材","exercises":[...]}
-4. JSON 之後才能加上自然語言說明
-5. 動作替換時，只替換指定動作，其他保持不變
+3. JSON 之後才能加上自然語言說明（鼓勵語或備注）
+4. 動作替換時，只替換指定動作，其他保持不變，輸出完整更新後的菜單 JSON
+5. weight 欄位必須輸出具體值（如 "60kg" 或 "徒手"），不可輸出 "自訂"
 ```
 
 Temperature: `0.3`
@@ -179,22 +181,32 @@ function extractJson(response: string): WorkoutPlan {
 
 ## 型別定義
 
-### WorkoutPlan（AI 輸出，尚未儲存）
+### 共用型別
 
 ```typescript
-// gemini.ts 解析後的暫存型別，用於對話過程中
-interface WorkoutPlan {
-  category: '上肢' | '下肢' | '核心' | '全身' | '伸展'
-  duration: number
-  equipment: '有器材' | '純徒手'
-  exercises: Exercise[]
-}
+// 定義於 features/chat/types.ts，其他 feature 透過 import 使用
 
+// Exercise 唯一定義，WorkoutPlan 與 WorkoutRecord 共用
 interface Exercise {
   name: string    // "槓鈴臥推"
   sets: number    // 4
   reps: number    // 10
   weight: string  // "60kg" | "徒手"（Gemini 須輸出具體值，不可輸出「自訂」）
+}
+
+type WorkoutCategory = '上肢' | '下肢' | '核心' | '全身' | '伸展'
+type Equipment = '有器材' | '純徒手'
+```
+
+### WorkoutPlan（AI 輸出，尚未儲存）
+
+```typescript
+// gemini.ts 解析後的暫存型別，用於對話過程中
+interface WorkoutPlan {
+  category: WorkoutCategory
+  duration: number
+  equipment: Equipment
+  exercises: Exercise[]
 }
 ```
 
@@ -207,20 +219,13 @@ interface Exercise {
 interface WorkoutRecord {
   id: string
   date: string              // "2026-03-23"
-  category: '上肢' | '下肢' | '核心' | '全身' | '伸展'
+  category: WorkoutCategory
   duration: number          // 分鐘
-  equipment: '有器材' | '純徒手'  // 伸展時自動設為「純徒手」
+  equipment: Equipment      // 伸展時自動設為「純徒手」
   name: string              // 預設為日期字串（"2026-03-23"），MVP 不提供自訂 UI
   exercises: Exercise[]
   completed: boolean        // 打卡狀態，初始為 false
-  createdAt: Timestamp
-}
-
-interface Exercise {
-  name: string              // "槓鈴臥推"
-  sets: number              // 4
-  reps: number              // 10
-  weight: string            // "60kg" | "徒手"
+  createdAt: Timestamp      // import { Timestamp } from 'firebase/firestore'
 }
 ```
 
@@ -233,21 +238,36 @@ interface Exercise {
 ```typescript
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<Message[]>([])       // 所有對話訊息（含 AI + User）
+  // Message 型別定義於 features/chat/types.ts：
+  // { id: string, role: 'ai' | 'user', content: string, timestamp: Date }
+
   const currentStep = ref<ConversationStep>('idle')
+
+  // 步驟 1–3 的使用者選擇，呼叫 Gemini 時帶入
+  const selectedCategory = ref<WorkoutCategory | null>(null)
+  const selectedDuration = ref<number | null>(null)
+  const selectedEquipment = ref<Equipment | null>(null)
+
   const currentWorkoutPlan = ref<WorkoutPlan | null>(null)  // AI 產出的最新菜單
   const targetExerciseName = ref<string | null>(null)       // replace_action 時儲存使用者指定的動作名稱
   const isLoading = ref(false)              // Gemini API 呼叫中
 
-  // Message 型別
-  // { id: string, role: 'ai' | 'user', content: string, timestamp: Date }
-
   function resetChat() {
     messages.value = []
     currentStep.value = 'idle'
+    selectedCategory.value = null
+    selectedDuration.value = null
+    selectedEquipment.value = null
     currentWorkoutPlan.value = null
+    targetExerciseName.value = null
   }
 
-  return { messages, currentStep, currentWorkoutPlan, targetExerciseName, isLoading, resetChat }
+  return {
+    messages, currentStep,
+    selectedCategory, selectedDuration, selectedEquipment,
+    currentWorkoutPlan, targetExerciseName,
+    isLoading, resetChat,
+  }
 })
 ```
 
