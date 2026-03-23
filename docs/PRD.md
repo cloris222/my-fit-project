@@ -105,7 +105,7 @@
   - 點擊 Quick reply chip → 自動送出，chips 消失（動畫：chip tap scale 0.95，100ms）
   - 新訊息出現 → 自動 scroll to bottom（smooth scroll 200ms）
   - 漢堡 icon 點擊 → 側邊欄從左滑入（動畫：translateX -100% → 0，250ms ease-out）
-- **Empty state**: 首次進入顯示 AI 歡迎訊息：「嗨！我是你的訓練助理。請問今天要做重訓還是伸展？」並附帶「重訓」「伸展」兩個 Quick reply chips
+- **Empty state**: 首次進入顯示 AI 歡迎訊息：「嗨！我是你的訓練助理。今天要練什麼？」並附帶 [上肢] [下肢] [核心] [全身] [伸展] 五個 Quick reply chips（Step 1 同時決定訓練類型與部位）
 - **Loading state**: 等待 AI 回應時顯示 Typing indicator bubble
 - **Error state**: AI API 失敗時在聊天區顯示錯誤訊息 bubble（背景 `#3D1A1A`，文字：「連線發生問題，請點擊重試」），附「重試」按鈕（金色文字按鈕）
 
@@ -143,9 +143,11 @@
     - **Completion badge**: 已完成顯示金色「已完成」tag（`#C9A84C` 文字，border `1px solid #C9A84C`，border-radius 12px，12px，padding 2px 8px）；未完成不顯示
     - **Action list**: 卡片下方以 row 排列，每行顯示：動作名稱（14px）+ 組數x次數（14px `#8B949E`）+ 重量或「徒手」（12px `#C9A84C`）
     - **Divider**: card header 與 action list 之間 `1px solid #30363D`，margin 8px 0
+    - **Mark complete button**: `completed: false` 時顯示於卡片底部，全寬文字按鈕，label「標記完成」，金色文字（`#C9A84C`），高度 36px；`completed: true` 時隱藏（改顯示 Completion badge）
   - **Floating action button**: 右下角固定，直徑 56px，背景 `#C9A84C`，icon 為「+」（24px 白色），點擊跳回 Chat 畫面開始新對話
 - **Interactions**:
-  - 點擊卡片 → 展開詳細資訊（預留，MVP 不實作，卡片不可點擊）
+  - 點擊卡片本體 → 無互動（展開詳細資訊預留 v2，MVP 不實作）
+  - 點擊「標記完成」→ 更新 Firestore `completed: true` → 按鈕消失 → Completion badge 淡入（150ms fade-in）+ 卡片 scale pulse 動畫（scale 1.02，200ms）
   - 點擊 FAB → 跳回 Chat 畫面，側邊欄關閉
   - 下拉到頂 → 不需 pull-to-refresh（MVP 省略）
 - **Empty state**: 無任何記錄時，畫面中央顯示 icon（啞鈴）+ 文字「還沒有訓練記錄」（`#8B949E`，16px）+ 文字「點擊右下角開始安排今天的菜單」（`#8B949E`，14px）
@@ -196,8 +198,8 @@ Step 5 [AI]:  「菜單已準備好！要儲存今天的訓練計畫嗎？」
     "duration": 45,
     "equipment": "有器材",
     "exercises": [
-      { "name": "槓鈴臥推", "sets": 4, "reps": 10, "weight": "自訂" },
-      { "name": "啞鈴飛鳥", "sets": 3, "reps": 12, "weight": "自訂" }
+      { "name": "槓鈴臥推", "sets": 4, "reps": 10, "weight": "60kg" },
+      { "name": "啞鈴飛鳥", "sets": 3, "reps": 12, "weight": "徒手" }
     ]
   }
   ```
@@ -212,7 +214,7 @@ Step 5 [AI]:  「菜單已準備好！要儲存今天的訓練計畫嗎？」
 - **Hours 1-2**: 專案初始化，設定 Firebase、環境變數、Tailwind dark mode 設定、路由結構（Chat / Records）
 - **Hours 3-5**: 視覺基礎建設：全域 CSS token（色彩、字體、spacing），Sidebar 元件（含手機 overlay 邏輯）
 - **Hours 6-10**: Chat 畫面實作：訊息泡泡元件、Typing indicator、Quick reply chips、底部輸入列
-- **Hours 11-14**: AI 對話流程串接：OpenAI API 呼叫、System prompt 設計、固定 5 步驟流程狀態機
+- **Hours 11-14**: AI 對話流程串接：Gemini API 呼叫、System prompt 設計、固定 5 步驟流程狀態機
 - **Hours 15-16**: 整合測試：完整跑一次對話流程，確認 AI 輸出格式正確
 
 ### Day 2 (Hours 17-32)
@@ -321,7 +323,7 @@ type ConversationStep =
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
 | AI 輸出 JSON 格式不穩定 | High | System prompt 嚴格規範輸出格式，加 JSON.parse try-catch fallback，必要時 retry |
-| OpenAI API 費用超出預期 | Mid | 使用 gpt-4o-mini，設定每日 token 上限，MVP 期間手動監控 |
+| Gemini API 免費額度耗盡 | Low | 使用 gemini-2.0-flash 免費層，每日 1500 req 上限對個人使用綽綽有餘，監控 Google AI Studio 用量 |
 | Firebase 設定耗時過長 | Mid | Day 1 Hour 1-2 優先完成，卡住立即改用純 localStorage 先行 |
 | RWD 在小螢幕破版 | Mid | 全程以 375px 為開發基準，375px / 390px / 768px 三個斷點驗收 |
 | 對話流程狀態管理複雜 | Mid | 使用簡單的 step index 狀態機（0-4），避免過度工程化 |
