@@ -39,7 +39,7 @@
 
 - 單人開發，48 小時執行
 - 使用既有技術堆疊，不引入額外後端服務
-- AI 對話使用現有 LLM API（OpenAI / Gemini），prompt engineering 控制流程
+- AI 對話使用 Google Gemini API（gemini-2.0-flash），prompt engineering 控制流程
 - Firebase Firestore 儲存訓練記錄，localStorage 作為離線 fallback
 - 不建置自訂 API server（直接從前端呼叫 LLM API）
 
@@ -51,7 +51,7 @@
 | Framework | Vue 3 + Vite + TypeScript | 既定技術堆疊，開發速度快 |
 | UI Kit | Ant Design Vue | 既定技術堆疊，元件豐富 |
 | Styling | Tailwind CSS + SCSS | 既定技術堆疊，utility-first 加速樣式開發 |
-| AI | OpenAI Chat API (GPT-4o-mini) | 對話流程控制穩定，成本低 |
+| AI | Google Gemini API (gemini-2.0-flash) | 免費額度充足，支援 JSON output mode，中文能力佳 |
 | Database | Firebase Firestore | 既定技術堆疊，無後端即可使用 |
 | Local Cache | localStorage | 離線 fallback，減少 Firestore 讀取 |
 | Testing | Vitest (unit) | 既定技術堆疊 |
@@ -158,15 +158,19 @@
 
 ### 固定 5 步驟對話流程
 
+> **設計說明**：Step 1 同時決定訓練類型（重訓/伸展）與部位，以 Quick reply chips 的部位分類隱含類型。選「伸展」時跳過 Step 3（器材），直接進入 Step 4 產出菜單。
+
 ```
-Step 1 [AI]:  「今天要做重訓還是伸展？」
-              Quick replies: [重訓] [伸展]
+Step 1 [AI]:  「今天要練什麼？」
+              Quick replies: [上肢] [下肢] [核心] [全身] [伸展]
+              （選上肢/下肢/核心/全身 → 重訓流程；選伸展 → 跳過 Step 3）
 
 Step 2 [AI]:  「預計運動多久？」
               Quick replies: [30 分鐘] [45 分鐘] [60 分鐘] [90 分鐘]
 
 Step 3 [AI]:  「需要器材（啞鈴/槓鈴/機器）還是純徒手？」
               Quick replies: [有器材] [純徒手]
+              （伸展時跳過此步驟，equipment 自動設為「純徒手」）
 
               → AI 產出第一版菜單（結構化格式）
               → 同時詢問：「需要替換其中任何動作嗎？」
@@ -238,7 +242,7 @@ interface WorkoutRecord {
   date: string            // "2026-03-16"
   category: string        // "上肢" | "下肢" | "核心" | "全身" | "伸展"
   duration: number        // minutes
-  equipment: string       // "有器材" | "純徒手"
+  equipment: '有器材' | '純徒手'  // 伸展時自動設為「純徒手」
   name: string            // 預設為日期，可自訂
   exercises: Exercise[]
   completed: boolean      // 打卡狀態
@@ -252,6 +256,63 @@ interface Exercise {
   weight: string          // "60kg" | "徒手"
 }
 ```
+
+---
+
+## Architecture Decisions
+
+### 目錄結構：Feature-based 模組化
+
+選用 Feature-based 而非傳統 Layer-based（components/views/composables），原因：每個 feature 自成一體，相關檔案集中，未來擴充不影響其他模組。
+
+```
+src/
+  features/
+    chat/
+      components/     # MessageBubble、TypingIndicator、QuickReplyChips、InputBar
+      composables/    # useChat.ts（對話狀態 + 5步驟狀態機）
+      types.ts
+    records/
+      components/     # RecordCard、SkeletonCard、EmptyState
+      composables/    # useWorkouts.ts（讀取/寫入訓練記錄）
+      types.ts
+    sidebar/
+      components/     # SidebarNav、CategoryItem
+      composables/    # useSidebar.ts（開關狀態）
+  services/
+    gemini.ts         # Gemini API 呼叫、system prompt、JSON parse
+    firebase.ts       # Firestore CRUD 封裝
+    localStorage.ts   # localStorage 讀寫、離線 fallback
+  stores/
+    chat.ts           # Pinia：訊息列表、當前步驟
+    workouts.ts       # Pinia：訓練記錄快取
+  router/
+    index.ts          # /chat、/records/:category
+  assets/
+    styles/           # 全域 CSS token、Tailwind 設定
+```
+
+**規則**：`features/` 內元件只使用自己 feature 的 composable；跨 feature 共享狀態透過 `stores/` 傳遞；`services/` 不知道 UI 存在。
+
+### AI 對話狀態機
+
+```typescript
+type ConversationStep =
+  | 'idle'           // 初始，顯示歡迎訊息
+  | 'ask_category'   // Step 1：今天要練什麼？
+  | 'ask_duration'   // Step 2：預計多久？
+  | 'ask_equipment'  // Step 3：器材？（伸展時跳過）
+  | 'show_menu'      // AI 產出菜單，詢問是否替換
+  | 'replace_action' // 使用者要替換動作
+  | 'confirm_save'   // Step 5：儲存？
+  | 'done'
+```
+
+### 測試範圍（MVP）
+
+只測最高風險的兩個單元：
+1. `gemini.ts` — AI 回應的 JSON 解析邏輯（正確格式、格式跑掉、缺欄位）
+2. `useChat.ts` — 狀態機轉換（正常流程、伸展跳過 equipment、替換動作分支）
 
 ---
 
